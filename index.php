@@ -1,2 +1,51 @@
-<?php session_start();$host='sql100.epizy.com';$user='epiz_35123456';$pass='123456';$db='epiz_35123456_invest';$conn=new mysqli($host,$user,$pass,$db);if($conn->connect_error)die("Base tsy mety");$conn->query("CREATE TABLE IF NOT EXISTS users(id INT AUTO_INCREMENT PRIMARY KEY,username VARCHAR(50) UNIQUE,password VARCHAR(255),trx_wallet VARCHAR(50),balance DECIMAL(15,2) DEFAULT 0)");$conn->query("CREATE TABLE IF NOT EXISTS deposits(id INT AUTO_INCREMENT PRIMARY KEY,user_id INT,txid VARCHAR(100) UNIQUE,amount DECIMAL(15,2),status ENUM('pending','confirmed') DEFAULT 'pending')");$conn->query("CREATE TABLE IF NOT EXISTS withdrawals(id INT AUTO_INCREMENT PRIMARY KEY,user_id INT,amount DECIMAL(15,2),trx_wallet VARCHAR(50),status ENUM('pending','confirmed','rejected') DEFAULT 'pending')");$TRX_ADDRESS="TXxDHt1EYDWvvjHBZMvG53vyoCmPxo34yD";$TRX_TO_USD=0.17;$QR="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=".urlencode($TRX_ADDRESS);function isLoggedIn(){return isset($_SESSION['user_id']);}function getUser(){global $conn;if(!isLoggedIn())return null;$id=$_SESSION['user_id'];$res=$conn->query("SELECT * FROM users WHERE id=$id");return $res->fetch_assoc();}$page=$_GET['page']??'login';$msg="";if($page=='register'&&isset($_POST['register'])){$u=trim($_POST['username']);$p=password_hash($_POST['password'],PASSWORD_DEFAULT);$w=trim($_POST['trx_wallet']);if(strlen($u)<3||strlen($_POST['password'])<6||strlen($w)<30)$msg="<div style='background:#300;color:#f66;padding:15px;border-radius:15px'>Données invalides</div>";else{$stmt=$conn->prepare("INSERT INTO users(username,password,trx_wallet)VALUES(?,?,?)");$stmt->bind_param("sss",$u,$p,$w);$msg=$stmt->execute()?"<div style='background:#003300;color:#0f0;padding:15px;border-radius:15px'>Compte créé !</div>":"<div style='background:#300;color:#f66;padding:15px;border-radius:15px'>Pseudo déjà pris</div>";}}if($page=='login'&&isset($_POST['login'])){$u=trim($_POST['username']);$p=$_POST['password'];$res=$conn->query("SELECT * FROM users WHERE username='$u'");if($res->num_rows>0){$row=$res->fetch_assoc();if(password_verify($p,$row['password'])){$_SESSION['user_id']=$row['id'];header("Location: ?page=dashboard");exit;}}}$msg="<div style='background:#300;color:#f66;padding:15px;border-radius:15px'>Mauvais identifiants</div>";}if($page=='deposit'&&isset($_POST['check_txid'])){$txid=trim($_POST['txid']);$data=json_decode(file_get_contents("https://api.trongrid.io/v1/transactions/$txid"),true);if(isset($data['to'])&&$data['to']===$TRX_ADDRESS&&!empty($data['success'])){$usd=($data['value']/1000000)*$TRX_TO_USD;$uid=$_SESSION['user_id'];$check=$conn->query("SELECT id FROM deposits WHERE txid='$txid'");if($check->num_rows==0){$conn->query("INSERT INTO deposits(user_id,txid,amount,status)VALUES($uid,'$txid',$usd,'confirmed')");$conn->query("UPDATE users SET balance=balance+$usd WHERE id=$uid");$msg="<div style='background:#003300;color:#0f0;padding:15px;border-radius:15px'>+$".number_format($usd,2)." $ crédités !</div>";}}}if($page=='withdraw'&&isset($_POST['request'])){$a=floatval($_POST['amount']);$u=getUser();if($a<10||$a>$u['balance'])$msg="<div style='background:#300;color:#f66;padding:15px;border-radius:15px'>Erreur montant</div>";else{$conn->query("INSERT INTO withdrawals(user_id,amount,trx_wallet)VALUES({$u['id']},$a,'{$u['trx_wallet']}')");$conn->query("UPDATE users SET balance=balance-$a WHERE id={$u['id']}");$msg="<div style='background:#003300;color:#0f0;padding:15px;border-radius:15px'>Demande envoyée</div>";}}if(isset($_GET['logout'])){session_destroy();header("Location: ?");exit;}?>
-<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>InvestPro $</title><style>body{background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;font-family:Arial;text-align:center;padding:20px;min-height:100vh;display:flex;justify-content:center;align-items:center}.c{background:rgba(255,255,255,.1);backdrop-filter:blur(12px);border-radius:24px;padding:35px;max-width:460px;width:100%}h1{color:#00ff88;font-size:30px}input,button{width:100%;padding:15px;margin:12px 0;border:none;border-radius:14px;font-size:16px}input{background:rgba(255,255,255,.15);color:#fff}button{background:#00cc66;color:#fff;font-weight:bold}</style></head><body><div class="c"><h1>InvestPro TRX $</h1><?php if($msg)echo $msg;if(!isLoggedIn()){echo $page=='register'?'<form method=post><input name=username placeholder=Pseudo required><input type=password name=password placeholder="Mot de passe" required><input name=trx_wallet placeholder="Wallet TRX" required><button name=register>Inscription</button></form><p><a href=?page=login style=color:#8ff>Connexion</a></p>':'<form method=post><input name=username placeholder=Pseudo required><input type=password name=password placeholder="Mot de passe" required><button name=login>Connexion</button></form><p><a href=?page=register style=color:#8ff>Inscription</a></p>';}else{$u=getUser();echo"<h2>Salut ".$u['username']."</h2><p style='font-size:32px;color:#0f0'>$".number_format($u['balance'],2)."</p><p><a href=?page=deposit style='background:#00cc66;color:#fff;padding:12px 20px;border-radius:12px;margin:5px'>Dépôt</a> <a href=?page=withdraw style='background:#c33;color:#fff;padding:12px 20px;border-radius:12px;margin:5px'>Retrait</a> <a href=?logout style=color:#faa>Déconnexion</a></p>";if($page=='deposit')echo"<p>Adresse :<br><b>$TRX_ADDRESS</b></p><img src='$QR' width=200><form method=post><input name=txid placeholder=TXID required><button name=check_txid>Créditer</button></form>";if($page=='withdraw')echo"<form method=post><input type=number step=0.01 name=amount min=10 placeholder='Montant $' required><button name=request style=background:#c33>Retirer</button></form>";}?></div></body></html>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>PayConnect — Plateforme TRX</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f9f9f9; margin:0; padding:20px; }
+    h1 { font-size:22px; color:#333; margin-bottom:10px; }
+    .desc { font-size:14px; color:#555; margin-bottom:20px; }
+    .plan { border:1px solid #ccc; background:#fff; padding:10px; margin-bottom:15px; border-radius:5px; }
+    .plan h2 { margin:0; font-size:16px; color:#444; }
+    .plan p { margin:5px 0; font-size:13px; }
+    .actions a { margin-right:10px; padding:6px 12px; background:#007bff; color:#fff; text-decoration:none; border-radius:4px; font-size:13px; }
+  </style>
+</head>
+<body>
+  <h1>PayConnect</h1>
+  <div class="desc">
+    Plateforme TRX sécurisée et fiable : dépôts vérifiés, retraits contrôlés, parrainage 10%, et plans de profit clairs.
+  </div>
+
+  <div class="plan">
+    <h2>Basic</h2>
+    <p>Min: 50 TRX</p>
+    <p>Profit: +50%</p>
+  </div>
+
+  <div class="plan">
+    <h2>Premium</h2>
+    <p>Min: 100 TRX</p>
+    <p>Profit: +100%</p>
+  </div>
+
+  <div class="plan">
+    <h2>VIP</h2>
+    <p>Min: 500 TRX</p>
+    <p>Profit: +150%</p>
+  </div>
+
+  <div class="plan">
+    <h2>Elite</h2>
+    <p>Min: 1000 TRX</p>
+    <p>Profit: +200%</p>
+  </div>
+
+  <div class="actions">
+    <a href="signup.html">S’inscrire</a>
+    <a href="login.html">Se connecter</a>
+  </div>
+</body>
+</html>
